@@ -18,3 +18,9 @@ public final class PublishRelay<Output>: Publisher {
         subject.send(value)
     }
 }
+
+extension PublishRelay {
+    public func asPublisher() -> AnyPublisher<Output, Never> {
+        eraseToAnyPublisher()
+    }
+}
