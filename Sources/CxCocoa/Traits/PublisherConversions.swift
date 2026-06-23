@@ -3,8 +3,10 @@ import Foundation
 
 extension Driver {
     /// Converts to Signal (same stream, no replay).
+    /// Routes through the Driver's internal non-replaying event subject,
+    /// bypassing the CurrentValueSubject to prevent leaking the current value.
     public func asSignal() -> Signal<Output> {
-        Signal(self)
+        Signal(asSignalPublisher())
     }
 }
 
