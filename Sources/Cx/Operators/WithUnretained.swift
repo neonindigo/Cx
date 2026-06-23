@@ -6,7 +6,12 @@ extension Publisher {
     public func withUnretained<Object: AnyObject>(
         _ object: Object
     ) -> AnyPublisher<(Object, Output), Failure> {
-        // TODO: implement
-        fatalError("stub")
+        map { [weak object] value -> (Object, Output)? in
+            guard let object = object else { return nil }
+            return (object, value)
+        }
+        .prefix(while: { $0 != nil })
+        .compactMap { $0 }
+        .eraseToAnyPublisher()
     }
 }
