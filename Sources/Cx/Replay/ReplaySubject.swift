@@ -59,6 +59,7 @@ public final class ReplaySubject<Output, Failure: Error>: Subject {
 private final class ReplaySubjectSubscription<Output, Failure: Error>: Subscription {
     private var subscriber: AnySubscriber<Output, Failure>?
     private let onCancel: (ReplaySubjectSubscription<Output, Failure>) -> Void
+    private let lock = NSLock()
 
     init<S: Subscriber>(
         subscriber: S,
@@ -71,16 +72,24 @@ private final class ReplaySubjectSubscription<Output, Failure: Error>: Subscript
     func request(_ demand: Subscribers.Demand) {}
 
     func cancel() {
+        lock.lock()
         subscriber = nil
+        lock.unlock()
         onCancel(self)
     }
 
     func receive(_ value: Output) {
-        _ = subscriber?.receive(value)
+        lock.lock()
+        let sub = subscriber
+        lock.unlock()
+        _ = sub?.receive(value)
     }
 
     func receive(completion: Subscribers.Completion<Failure>) {
-        subscriber?.receive(completion: completion)
+        lock.lock()
+        let sub = subscriber
         subscriber = nil
+        lock.unlock()
+        sub?.receive(completion: completion)
     }
 }
