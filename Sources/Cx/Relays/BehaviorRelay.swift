@@ -22,3 +22,9 @@ public final class BehaviorRelay<Output>: Publisher {
         subject.send(value)
     }
 }
+
+extension BehaviorRelay {
+    public func asPublisher() -> AnyPublisher<Output, Never> {
+        eraseToAnyPublisher()
+    }
+}
