@@ -46,6 +46,10 @@ public final class ReplaySubject<Output, Failure: Error>: Subject {
         if let completion { subscription.receive(completion: completion) }
     }
 
+    public static func replay(_ bufferSize: Int) -> ReplaySubject<Output, Failure> {
+        ReplaySubject(bufferSize: bufferSize)
+    }
+
     private func remove(subscription: ReplaySubjectSubscription<Output, Failure>) {
         lock.lock(); defer { lock.unlock() }
         subscriptions.removeAll { $0 === subscription }
