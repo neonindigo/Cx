@@ -358,6 +358,23 @@ final class WithUnretainedTests: XCTestCase {
         XCTAssertEqual(values, [1])
         XCTAssertTrue(completed)
     }
+
+    // Regression: must complete even when upstream goes silent after object dealloc.
+    func testCompletesWhenObjectDeallocatedEvenIfUpstreamSilent() {
+        let subject = PassthroughSubject<Int, Never>()
+        var obj: NSObject? = NSObject()
+        var completed = false
+
+        subject.withUnretained(obj!)
+            .sink(receiveCompletion: { if case .finished = $0 { completed = true } },
+                  receiveValue: { _ in })
+            .store(in: &cancellables)
+
+        subject.send(1)
+        obj = nil   // deallocate — upstream never emits again
+        // No further send — completion must arrive from the DeallocObserver alone.
+        XCTAssertTrue(completed, "Expected .finished after object dealloc with no further upstream emission")
+    }
 }
 
 // MARK: - MaterializeTests
@@ -403,6 +420,31 @@ final class MaterializeTests: XCTestCase {
 
         XCTAssertEqual(received, [1, 2])
         XCTAssertTrue(failed)
+    }
+
+    // Regression: materialize must work with synchronous cold publishers (not just PassthroughSubject).
+    func testMaterializeSynchronousPublisher() {
+        var events: [Event<Int, Never>] = []
+        [1, 2, 3].publisher
+            .materialize()
+            .sink { events.append($0) }
+            .cancel()
+        XCTAssertEqual(events.count, 4)
+        guard case .value(1) = events[0] else { XCTFail("expected .value(1)"); return }
+        guard case .value(2) = events[1] else { XCTFail("expected .value(2)"); return }
+        guard case .value(3) = events[2] else { XCTFail("expected .value(3)"); return }
+        guard case .finished = events[3] else { XCTFail("expected .finished"); return }
+    }
+
+    // Regression: materialize must capture .failure from synchronous Fail publisher.
+    func testMaterializeSynchronousFailure() {
+        var events: [Event<Int, TestError>] = []
+        Fail<Int, TestError>(error: .boom)
+            .materialize()
+            .sink { events.append($0) }
+            .cancel()
+        XCTAssertEqual(events.count, 1)
+        guard case .failure(.boom) = events[0] else { XCTFail("expected .failure(.boom)"); return }
     }
 }
 
