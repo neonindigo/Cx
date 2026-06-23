@@ -49,8 +49,12 @@ where S.Input == Control, S.Failure == Never {
     func request(_ demand: Subscribers.Demand) {}
 
     func cancel() {
-        control?.target = nil
-        control?.action = nil
+        // Only clear the target/action if this subscription is still the installed target.
+        // A later subscription may have overwritten our slot; clearing blindly would kill it.
+        if control?.target === actionTarget {
+            control?.target = nil
+            control?.action = nil
+        }
         control = nil
         subscriber = nil
     }

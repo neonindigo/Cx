@@ -8,9 +8,10 @@ extension NSSwitch {
     /// - Note: Returns the full `StateValue` (`.on`, `.off`, `.mixed`) rather than a `Bool`
     ///   to avoid silent loss of the `.mixed` state.
     public var statePublisher: AnyPublisher<NSControl.StateValue, Never> {
-        NSControlPublisher(control: self)
+        let initial = Deferred { [weak self] in Just(self?.state ?? .off) }
+        return NSControlPublisher(control: self)
             .map { $0.state }
-            .prepend(state)
+            .prepend(initial)
             .eraseToAnyPublisher()
     }
 }
