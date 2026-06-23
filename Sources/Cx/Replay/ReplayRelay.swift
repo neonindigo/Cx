@@ -19,4 +19,8 @@ public final class ReplayRelay<Output>: Publisher {
     public func send(_ value: Output) {
         subject.send(value)
     }
+
+    public func asPublisher() -> AnyPublisher<Output, Never> {
+        subject.eraseToAnyPublisher()
+    }
 }
