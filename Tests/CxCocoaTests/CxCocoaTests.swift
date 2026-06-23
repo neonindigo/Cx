@@ -68,6 +68,9 @@ final class UIControlPublisherTests: XCTestCase {
         XCTAssertEqual(values.count, 2)
         cancellable.cancel()
     }
+}
+#endif
+
 #if canImport(AppKit) && !canImport(UIKit)
 import AppKit
 import Combine

@@ -285,3 +285,413 @@ final class ReplayRelayTests: XCTestCase {
         XCTAssertEqual(received, [5])
     }
 }
+
+// MARK: - Shared test error
+
+private enum TestError: Error, Equatable {
+    case boom
+}
+
+// MARK: - EnumeratedTests
+
+final class EnumeratedTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testIndexSequenceIsCorrect() {
+        var results: [(index: Int, element: String)] = []
+        ["a", "b", "c"].publisher
+            .enumerated()
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+        XCTAssertEqual(results.map(\.index),   [0, 1, 2])
+        XCTAssertEqual(results.map(\.element), ["a", "b", "c"])
+    }
+
+    func testEmptyPublisher() {
+        var results: [(index: Int, element: Int)] = []
+        var completed = false
+        Empty<Int, Never>()
+            .enumerated()
+            .sink(receiveCompletion: { if case .finished = $0 { completed = true } },
+                  receiveValue: { results.append($0) })
+            .store(in: &cancellables)
+        XCTAssertTrue(results.isEmpty)
+        XCTAssertTrue(completed)
+    }
+}
+
+// MARK: - WithUnretainedTests
+
+final class WithUnretainedTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testEmitsWhileObjectAlive() {
+        let subject = PassthroughSubject<Int, Never>()
+        let obj     = NSObject()
+        var values: [Int] = []
+
+        subject.withUnretained(obj)
+            .sink { values.append($0.1) }
+            .store(in: &cancellables)
+
+        subject.send(1); subject.send(2)
+        XCTAssertEqual(values, [1, 2])
+        _ = obj // keep alive
+    }
+
+    func testCompletesWhenObjectDeallocated() {
+        let subject = PassthroughSubject<Int, Never>()
+        var obj: NSObject? = NSObject()
+        var values: [Int] = []
+        var completed = false
+
+        subject.withUnretained(obj!)
+            .sink(receiveCompletion: { if case .finished = $0 { completed = true } },
+                  receiveValue: { values.append($0.1) })
+            .store(in: &cancellables)
+
+        subject.send(1)
+        obj = nil          // deallocate — next emission triggers nil check
+        subject.send(2)    // should cause completion, not emission
+
+        XCTAssertEqual(values, [1])
+        XCTAssertTrue(completed)
+    }
+
+    // Regression: must complete even when upstream goes silent after object dealloc.
+    func testCompletesWhenObjectDeallocatedEvenIfUpstreamSilent() {
+        let subject = PassthroughSubject<Int, Never>()
+        var obj: NSObject? = NSObject()
+        var completed = false
+
+        subject.withUnretained(obj!)
+            .sink(receiveCompletion: { if case .finished = $0 { completed = true } },
+                  receiveValue: { _ in })
+            .store(in: &cancellables)
+
+        subject.send(1)
+        obj = nil   // deallocate — upstream never emits again
+        // No further send — completion must arrive from the DeallocObserver alone.
+        XCTAssertTrue(completed, "Expected .finished after object dealloc with no further upstream emission")
+    }
+}
+
+// MARK: - MaterializeTests
+
+final class MaterializeTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testWrapsFailureAsEvent() {
+        let subject = PassthroughSubject<Int, TestError>()
+        var events: [Event<Int, TestError>] = []
+        var outerCompleted = false
+
+        subject.materialize()
+            .sink(receiveCompletion: { if case .finished = $0 { outerCompleted = true } },
+                  receiveValue: { events.append($0) })
+            .store(in: &cancellables)
+
+        subject.send(1); subject.send(2)
+        subject.send(completion: .failure(.boom))
+
+        XCTAssertEqual(events.count, 3)
+        guard case .value(1)      = events[0] else { XCTFail("expected .value(1)");       return }
+        guard case .value(2)      = events[1] else { XCTFail("expected .value(2)");       return }
+        guard case .failure(.boom) = events[2] else { XCTFail("expected .failure(.boom)"); return }
+        XCTAssertTrue(outerCompleted)
+    }
+
+    func testRoundtripMaterializeDematerialize() {
+        let subject = PassthroughSubject<Int, TestError>()
+        var received: [Int] = []
+        var failed = false
+
+        subject.materialize()
+            .dematerialize()
+            .sink(receiveCompletion: { if case .failure = $0 { failed = true } },
+                  receiveValue: { received.append($0) })
+            .store(in: &cancellables)
+
+        subject.send(1); subject.send(2)
+        subject.send(completion: .failure(.boom))
+
+        XCTAssertEqual(received, [1, 2])
+        XCTAssertTrue(failed)
+    }
+
+    // Regression: materialize must work with synchronous cold publishers (not just PassthroughSubject).
+    func testMaterializeSynchronousPublisher() {
+        var events: [Event<Int, Never>] = []
+        [1, 2, 3].publisher
+            .materialize()
+            .sink { events.append($0) }
+            .cancel()
+        XCTAssertEqual(events.count, 4)
+        guard case .value(1) = events[0] else { XCTFail("expected .value(1)"); return }
+        guard case .value(2) = events[1] else { XCTFail("expected .value(2)"); return }
+        guard case .value(3) = events[2] else { XCTFail("expected .value(3)"); return }
+        guard case .finished = events[3] else { XCTFail("expected .finished"); return }
+    }
+
+    // Regression: materialize must capture .failure from synchronous Fail publisher.
+    func testMaterializeSynchronousFailure() {
+        var events: [Event<Int, TestError>] = []
+        Fail<Int, TestError>(error: .boom)
+            .materialize()
+            .sink { events.append($0) }
+            .cancel()
+        XCTAssertEqual(events.count, 1)
+        guard case .failure(.boom) = events[0] else { XCTFail("expected .failure(.boom)"); return }
+    }
+}
+
+// MARK: - WithLatestFromTests
+
+final class WithLatestFromTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testEmitsWithLatestFromOther() {
+        let source = PassthroughSubject<Int, Never>()
+        let other  = PassthroughSubject<String, Never>()
+        var results: [(Int, String)] = []
+
+        source.withLatestFrom(other)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        other.send("a")
+        source.send(1)   // → (1, "a")
+        other.send("b")
+        source.send(2)   // → (2, "b")
+
+        XCTAssertEqual(results.map(\.0), [1, 2])
+        XCTAssertEqual(results.map(\.1), ["a", "b"])
+    }
+
+    func testDropsWhenOtherHasNoValueYet() {
+        let source = PassthroughSubject<Int, Never>()
+        let other  = PassthroughSubject<String, Never>()
+        var results: [(Int, String)] = []
+
+        source.withLatestFrom(other)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        source.send(1)   // other hasn't emitted — drop
+        other.send("x")
+        source.send(2)   // → (2, "x")
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.0, 2)
+        XCTAssertEqual(results.first?.1, "x")
+    }
+}
+
+// MARK: - RetryWhenTests
+
+final class RetryWhenTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testRetriesOnTrigger() {
+        var attemptCount = 0
+        let retryTrigger = PassthroughSubject<Void, Never>()
+        var received: [Int] = []
+        var completedWithError: TestError?
+
+        // Each subscription to this Deferred increments attemptCount and
+        // emits [1, 2] then immediately fails.
+        let upstream = Deferred<AnyPublisher<Int, TestError>> {
+            attemptCount += 1
+            return [1, 2].publisher
+                .setFailureType(to: TestError.self)
+                .append(Fail(error: TestError.boom))
+                .eraseToAnyPublisher()
+        }
+
+        upstream.retryWhen { errors in
+            // Zip: each error must be paired with a trigger pulse to retry.
+            errors.zip(retryTrigger).map { _ in () }
+        }
+        .sink(receiveCompletion: { if case .failure(let e) = $0 { completedWithError = e } },
+              receiveValue: { received.append($0) })
+        .store(in: &cancellables)
+
+        // First attempt has already run synchronously.
+        XCTAssertEqual(received, [1, 2])
+        XCTAssertNil(completedWithError)
+        XCTAssertEqual(attemptCount, 1)
+
+        retryTrigger.send(())  // triggers retry #2
+        XCTAssertEqual(received, [1, 2, 1, 2])
+        XCTAssertNil(completedWithError)
+        XCTAssertEqual(attemptCount, 2)
+    }
+
+    func testStopsWhenNotifierCompletes() {
+        var received: [Int] = []
+        var caughtError: TestError?
+
+        Fail<Int, TestError>(error: .boom)
+            .retryWhen { errors in
+                // Take exactly one error then complete — no retry emitted.
+                errors.prefix(1).flatMap { _ in Empty<Void, Never>() }
+            }
+            .sink(receiveCompletion: { if case .failure(let e) = $0 { caughtError = e } },
+                  receiveValue: { received.append($0) })
+            .store(in: &cancellables)
+
+        XCTAssertEqual(caughtError, .boom)
+        XCTAssertTrue(received.isEmpty)
+    }
+}
+
+// MARK: - SampleTests
+
+final class SampleTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testEmitsLatestValueOnTrigger() {
+        let source  = PassthroughSubject<Int, Never>()
+        let trigger = PassthroughSubject<Void, Never>()
+        var results: [Int] = []
+
+        source.sample(trigger)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        source.send(1); source.send(2)
+        trigger.send(())  // should emit 2 (most recent)
+
+        XCTAssertEqual(results, [2])
+    }
+
+    func testNoDuplicateOnSecondTriggerWithoutNewValue() {
+        let source  = PassthroughSubject<Int, Never>()
+        let trigger = PassthroughSubject<Void, Never>()
+        var results: [Int] = []
+
+        source.sample(trigger)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        source.send(42)
+        trigger.send(())  // emits 42, clears stored value
+        trigger.send(())  // nothing stored — skipped
+
+        XCTAssertEqual(results, [42])
+    }
+}
+
+// MARK: - AmbTests
+
+final class AmbTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testFirstToEmitWins() {
+        let first  = PassthroughSubject<Int, Never>()
+        let second = PassthroughSubject<Int, Never>()
+        var results: [Int] = []
+
+        first.amb(second)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        second.send(99)  // second wins
+        first.send(1)    // ignored
+        second.send(100) // forwarded (second is winner)
+
+        XCTAssertEqual(results, [99, 100])
+    }
+
+    func testLoserIsCancelledAfterWinnerEmits() {
+        let first  = PassthroughSubject<Int, Never>()
+        let second = PassthroughSubject<Int, Never>()
+        var results: [Int] = []
+
+        first.amb(second)
+            .sink { results.append($0) }
+            .store(in: &cancellables)
+
+        first.send(1)    // first wins
+        second.send(99)  // loser — ignored
+        first.send(2)    // forwarded (first is winner)
+
+        XCTAssertEqual(results, [1, 2])
+    }
+}
+
+// MARK: - WindowTests
+
+final class WindowTests: XCTestCase {
+    var cancellables = Set<AnyCancellable>()
+
+    override func tearDown() { cancellables.removeAll(); super.tearDown() }
+
+    func testCorrectGroupingIntoCountSizedWindows() {
+        let source   = PassthroughSubject<Int, Never>()
+        var windows: [[Int]] = []
+        let exp = expectation(description: "two full windows collected")
+        exp.expectedFulfillmentCount = 2
+
+        source.window(ofCount: 3)
+            .sink { windowPub in
+                windowPub.collect()
+                    .sink { values in
+                        windows.append(values)
+                        exp.fulfill()
+                    }
+                    .store(in: &self.cancellables)
+            }
+            .store(in: &cancellables)
+
+        (1...6).forEach { source.send($0) }
+        source.send(completion: .finished)
+
+        waitForExpectations(timeout: 1)
+
+        XCTAssertEqual(windows.count, 2)
+        // Windows arrive in order because everything is synchronous.
+        let sorted = windows.sorted { $0.first ?? 0 < $1.first ?? 0 }
+        XCTAssertEqual(sorted[0], [1, 2, 3])
+        XCTAssertEqual(sorted[1], [4, 5, 6])
+    }
+
+    func testPartialLastWindowCompletes() {
+        let source   = PassthroughSubject<Int, Never>()
+        var windows: [[Int]] = []
+        let exp = expectation(description: "partial window collected")
+
+        source.window(ofCount: 3)
+            .sink { windowPub in
+                windowPub.collect()
+                    .sink { values in
+                        windows.append(values)
+                        exp.fulfill()
+                    }
+                    .store(in: &self.cancellables)
+            }
+            .store(in: &cancellables)
+
+        source.send(1); source.send(2)
+        source.send(completion: .finished)  // partial window of 2 should complete
+
+        waitForExpectations(timeout: 1)
+
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0], [1, 2])
+    }
+}
