@@ -36,24 +36,40 @@ public final class ReplaySubject<Output, Failure: Error>: Subject {
         subscriber: S
     ) where S.Input == Output, S.Failure == Failure {
         lock.lock(); defer { lock.unlock() }
-        let subscription = ReplaySubjectSubscription(subscriber: subscriber)
+        let subscription = ReplaySubjectSubscription(subscriber: subscriber) { [weak self] sub in
+            self?.remove(subscription: sub)
+        }
         subscriber.receive(subscription: subscription)
         subscriptions.append(subscription)
-        buffer.forEach { _ = subscriber.receive($0) }
-        if let completion { subscriber.receive(completion: completion) }
+        // Replay through the subscription so cancel() is respected and the nil-guard is honoured.
+        buffer.forEach { subscription.receive($0) }
+        if let completion { subscription.receive(completion: completion) }
+    }
+
+    private func remove(subscription: ReplaySubjectSubscription<Output, Failure>) {
+        lock.lock(); defer { lock.unlock() }
+        subscriptions.removeAll { $0 === subscription }
     }
 }
 
 private final class ReplaySubjectSubscription<Output, Failure: Error>: Subscription {
     private var subscriber: AnySubscriber<Output, Failure>?
+    private let onCancel: (ReplaySubjectSubscription<Output, Failure>) -> Void
 
-    init<S: Subscriber>(subscriber: S) where S.Input == Output, S.Failure == Failure {
+    init<S: Subscriber>(
+        subscriber: S,
+        onCancel: @escaping (ReplaySubjectSubscription<Output, Failure>) -> Void
+    ) where S.Input == Output, S.Failure == Failure {
         self.subscriber = AnySubscriber(subscriber)
+        self.onCancel = onCancel
     }
 
     func request(_ demand: Subscribers.Demand) {}
 
-    func cancel() { subscriber = nil }
+    func cancel() {
+        subscriber = nil
+        onCancel(self)
+    }
 
     func receive(_ value: Output) {
         _ = subscriber?.receive(value)

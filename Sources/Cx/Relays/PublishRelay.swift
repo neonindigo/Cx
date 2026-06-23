@@ -1,7 +1,7 @@
 import Combine
 
 /// A relay backed by PassthroughSubject that cannot terminate.
-public struct PublishRelay<Output>: Publisher {
+public final class PublishRelay<Output>: Publisher {
     public typealias Failure = Never
 
     private let subject = PassthroughSubject<Output, Never>()
