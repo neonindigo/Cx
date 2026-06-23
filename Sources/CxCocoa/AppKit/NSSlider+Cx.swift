@@ -3,10 +3,12 @@ import AppKit
 import Combine
 
 extension NSSlider {
-    /// Emits the current double value each time it changes.
+    /// Emits the current double value immediately on subscription, then each time it changes.
     public var valuePublisher: AnyPublisher<Double, Never> {
-        // TODO: implement
-        fatalError("stub")
+        NSControlPublisher(control: self)
+            .map { $0.doubleValue }
+            .prepend(doubleValue)
+            .eraseToAnyPublisher()
     }
 }
 #endif

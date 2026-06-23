@@ -3,10 +3,12 @@ import AppKit
 import Combine
 
 extension NSSegmentedControl {
-    /// Emits the selected segment index each time it changes.
+    /// Emits the selected segment index immediately on subscription, then each time it changes.
     public var selectedSegmentIndexPublisher: AnyPublisher<Int, Never> {
-        // TODO: implement
-        fatalError("stub")
+        NSControlPublisher(control: self)
+            .map { $0.selectedSegment }
+            .prepend(selectedSegment)
+            .eraseToAnyPublisher()
     }
 }
 #endif
