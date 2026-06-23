@@ -283,6 +283,9 @@ final class ReplayRelayTests: XCTestCase {
         var received: [Int] = []
         relay.asPublisher().sink { received.append($0) }.cancel()
         XCTAssertEqual(received, [5])
+    }
+}
+
 // MARK: - Shared test error
 
 private enum TestError: Error, Equatable {
