@@ -11,6 +11,7 @@ public struct Signal<Output>: Publisher {
     public init<P: Publisher>(_ publisher: P) where P.Output == Output, P.Failure == Never {
         upstream = publisher
             .receive(on: DispatchQueue.main)
+            .share()
             .eraseToAnyPublisher()
     }
 
