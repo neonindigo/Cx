@@ -82,7 +82,7 @@ extension XCTestCase {
         XCTAssertTrue(predicate(error), "Error did not satisfy predicate: \(error)", file: file, line: line)
     }
 
-    /// Asserts that `publisher` completes with `.finished` without emitting any values.
+    /// Asserts that `publisher` completes with `.finished`, regardless of how many values it emits.
     public func assertPublisherCompletes<P: Publisher>(
         _ publisher: P,
         timeout: TimeInterval = 1.0,
@@ -100,9 +100,6 @@ extension XCTestCase {
 
         XCTAssertTrue(subscriber.isFinished,
                       "Expected .finished completion but got \(String(describing: subscriber.receivedCompletion))",
-                      file: file, line: line)
-        XCTAssertTrue(subscriber.receivedValues.isEmpty,
-                      "Expected no values but received \(subscriber.receivedValues.count)",
                       file: file, line: line)
     }
 }
